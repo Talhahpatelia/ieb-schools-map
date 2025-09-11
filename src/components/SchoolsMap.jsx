@@ -1,6 +1,7 @@
 // src/components/SchoolsMapSvg.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as d3 from "d3";
+import { FaLinkedin, FaGithub, FaGlobe } from "react-icons/fa";
 
 const SCHOOLS_URL = "/schools.json";
 const COUNTRIES_SVG_URL = "/countries.svg"; // put your world SVG here (public/countries.svg)
@@ -309,9 +310,62 @@ export default function SchoolsMapSvg() {
                 color: "#e9eefb",
             }}
         >
-            <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, marginBottom: 16 }}>
-                IEB High Schools — South Africa
+            <h1
+                style={{
+                    margin: 0,
+                    fontSize: 20,
+                    fontWeight: 700,
+                    marginBottom: 16,
+                }}
+            >
+                IEB High Schools Map — South Africa — by Talhah Patelia
             </h1>
+
+            <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+                <a
+                    href="https://www.linkedin.com/in/talhah-patelia-77250a196/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                        color: "#e9eefb",
+                        textDecoration: "none",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                    }}
+                >
+                    <FaLinkedin /> LinkedIn
+                </a>
+                <a
+                    href="https://github.com/talhahpatelia"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                        color: "#e9eefb",
+                        textDecoration: "none",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                    }}
+                >
+                    <FaGithub /> GitHub
+                </a>
+                <a
+                    href="https://talhahpatelia.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                        color: "#e9eefb",
+                        textDecoration: "none",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                    }}
+                >
+                    <FaGlobe /> Website
+                </a>
+            </div>
+
             <div
                 style={{
                     display: "grid",
