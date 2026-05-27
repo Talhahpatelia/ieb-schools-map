@@ -19,6 +19,7 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
+    "geocode:places": "node scripts/geocode-schools-google-places.mjs",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },

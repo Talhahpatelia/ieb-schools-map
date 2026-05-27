@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import App from "./App";
 
 jest.mock("maplibre-gl", () => {
@@ -7,6 +7,7 @@ jest.mock("maplibre-gl", () => {
         addLayer = jest.fn();
         addSource = jest.fn();
         fitBounds = jest.fn();
+        flyTo = jest.fn();
         getCanvas = jest.fn(() => ({
             addEventListener: jest.fn(),
             removeEventListener: jest.fn(),
@@ -17,9 +18,12 @@ jest.mock("maplibre-gl", () => {
         isStyleLoaded = jest.fn(() => true);
         off = jest.fn();
         on = jest.fn();
+        queryRenderedFeatures = jest.fn(() => []);
         remove = jest.fn();
         removeLayer = jest.fn();
         removeSource = jest.fn();
+        setFilter = jest.fn();
+        setLayoutProperty = jest.fn();
         setPaintProperty = jest.fn();
         setStyle = jest.fn();
     }
@@ -85,6 +89,25 @@ const schools = [
             emailAddress: "info@example.com",
             website: "example.com",
             yearOfAffiliation: "2023",
+            location: {
+                formattedAddress: "270 Witch-Hazel Ave, Eco-Park Estate, Centurion",
+            },
+            _updatedDate: { $date: "2025-06-18T00:00:00.000Z" },
+        },
+    },
+    {
+        id: "school-2",
+        data: {
+            title: "Pretoria Sample College",
+            province: "Gauteng",
+            area: "Pretoria",
+            telephone: "012 000 0000",
+            emailAddress: "pretoria@example.com",
+            website: "pretoria.example.com",
+            yearOfAffiliation: "2024",
+            location: {
+                formattedAddress: "1 Church Street, Pretoria",
+            },
             _updatedDate: { $date: "2025-06-18T00:00:00.000Z" },
         },
     },
@@ -120,7 +143,7 @@ beforeEach(() => {
             ok: true,
             json: () =>
                 Promise.resolve(
-                    url.toString().includes("schools.json")
+                    url.toString().includes("schools")
                         ? schools
                         : provinces
                 ),
@@ -146,4 +169,26 @@ test("renders the IEB schools dashboard from local data", async () => {
     expect(screen.getAllByRole("button", { name: /gauteng/i }).length).toBeGreaterThan(
         0
     );
+});
+
+test("selects a school from the directory", async () => {
+    render(<App />);
+
+    fireEvent.click(await screen.findByText(/abbotts college centurion/i));
+
+    expect(screen.getByText(/selected school/i)).toBeInTheDocument();
+});
+
+test("filters schools by geocoded location text", async () => {
+    render(<App />);
+
+    expect(await screen.findByText(/pretoria sample college/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: /search schools/i }), {
+        target: { value: "Eco-Park" },
+    });
+
+    expect(screen.getByText(/abbotts college centurion/i)).toBeInTheDocument();
+    expect(screen.queryByText(/pretoria sample college/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/location: eco-park/i)).toBeInTheDocument();
 });

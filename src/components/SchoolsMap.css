@@ -237,6 +237,47 @@
     gap: 8px;
 }
 
+.map-options {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: -2px 0 12px;
+}
+
+.map-options__label,
+.layer-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+    padding: 7px 10px;
+    background: var(--field);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 0.82rem;
+    font-weight: 850;
+}
+
+.map-options__label {
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.layer-switch {
+    color: var(--text);
+    cursor: pointer;
+}
+
+.layer-switch input {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: var(--brand-2);
+    cursor: pointer;
+}
+
 .ghost-button,
 .load-more-button {
     display: inline-flex;
@@ -362,6 +403,25 @@
 .map-popup span {
     color: var(--muted);
     font-weight: 750;
+}
+
+.map-popup small {
+    max-width: 260px;
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+
+.map-popup a {
+    color: var(--blue);
+    font-weight: 850;
+    text-decoration: none;
+}
+
+.map-popup em {
+    color: var(--brand-3);
+    font-style: normal;
+    font-weight: 850;
 }
 
 .province-filter-list {
@@ -511,6 +571,37 @@
     padding: 0 2px;
 }
 
+.result-bar span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.selected-school-panel {
+    display: grid;
+    gap: 9px;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+}
+
+.selected-school-panel__heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.selected-school-panel__heading .eyebrow {
+    margin: 0;
+}
+
+.selected-school-panel__heading .ghost-button {
+    min-height: 34px;
+    padding: 7px 9px;
+}
+
 .school-list {
     display: grid;
     grid-template-columns: 1fr;
@@ -527,6 +618,26 @@
     border: 1px solid var(--line);
     border-left: 4px solid var(--brand);
     border-radius: 8px;
+    cursor: pointer;
+    transition:
+        transform 160ms ease,
+        border-color 160ms ease,
+        background-color 160ms ease,
+        box-shadow 160ms ease;
+}
+
+.school-card:hover,
+.school-card:focus-visible {
+    border-color: var(--brand-2);
+    border-left-color: var(--brand-2);
+    box-shadow: 0 10px 24px rgba(36, 28, 18, 0.12);
+    transform: translateY(-1px);
+}
+
+.school-card.is-selected {
+    background: color-mix(in srgb, var(--brand-2) 11%, var(--panel-solid));
+    border-color: var(--brand-2);
+    border-left-color: var(--brand-2);
 }
 
 .school-card__header {
@@ -563,6 +674,13 @@
     flex: 0 0 auto;
     margin-top: 2px;
     color: var(--brand-3);
+}
+
+.school-card p.school-card__address {
+    display: block;
+    margin-top: 4px;
+    padding-left: 21px;
+    font-size: 0.8rem;
 }
 
 .year-badge {
@@ -656,7 +774,8 @@
 .school-app a:focus-visible,
 .school-app button:focus-visible,
 .school-app input:focus-visible,
-.school-app select:focus-visible {
+.school-app select:focus-visible,
+.school-card:focus-visible {
     outline: 3px solid rgba(245, 179, 63, 0.92);
     outline-offset: 2px;
 }
@@ -728,6 +847,8 @@
     .header-actions,
     .header-main,
     .site-links,
+    .map-options,
+    .layer-switch,
     .panel-actions,
     .province-pill,
     .contact-grid a {
@@ -740,6 +861,10 @@
 
     .theme-toggle,
     .ghost-button {
+        width: 100%;
+    }
+
+    .map-options__label {
         width: 100%;
     }
 

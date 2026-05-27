@@ -14,6 +14,7 @@ import {
     FaExternalLinkAlt,
     FaGithub,
     FaGlobe,
+    FaLayerGroup,
     FaLinkedin,
     FaLocationArrow,
     FaMapMarkerAlt,
@@ -28,6 +29,7 @@ import "./SchoolsMap.css";
 const ProvinceChart = lazy(() => import("./ProvinceChart"));
 
 const SCHOOLS_URL = "/schools.json";
+const GEOCODED_SCHOOLS_URL = "/schools-geocoded.json";
 const PROVINCES_URL = "/sa-provinces.geojson";
 const GOTCHA_LOGO_URL = "/gotcha-logo.svg";
 
@@ -78,6 +80,11 @@ const CHOROPLETH_COLORS = [
 ];
 
 const LIST_BATCH_SIZE = 72;
+const DEFAULT_MAP_LAYERS = {
+    heatmap: true,
+    points: true,
+    provinceTint: true,
+};
 const numberFormatter = new Intl.NumberFormat("en-ZA");
 
 function normalizeProvince(value = "") {
@@ -99,6 +106,18 @@ function normalizeWebsite(value = "") {
 
 function parseSchool(entry, index) {
     const data = entry?.data || entry || {};
+    const rawLocation = data.location || entry?.location || {};
+    const latitude =
+        Number(rawLocation.latitude ?? rawLocation.lat ?? data.latitude ?? data.lat);
+    const longitude =
+        Number(
+            rawLocation.longitude ??
+                rawLocation.lng ??
+                rawLocation.lon ??
+                data.longitude ??
+                data.lng ??
+                data.lon
+        );
     const title = (data.title || "Untitled school").toString().trim();
     const province = normalizeProvince(data.province || "");
     const area = (data.area || "").toString().trim();
@@ -108,6 +127,12 @@ function parseSchool(entry, index) {
     const year =
         (data.yearOfAffiliation || "").toString().match(/\d{4}/)?.[0] || "";
     const updatedAt = data._updatedDate?.$date || data._updatedDate || "";
+    const matchedName = (rawLocation.matchedName || "").toString().trim();
+    const formattedAddress = (rawLocation.formattedAddress || "")
+        .toString()
+        .trim();
+    const geocodeQuery = (rawLocation.query || "").toString().trim();
+    const googleMapsUri = (rawLocation.googleMapsUri || "").toString().trim();
 
     return {
         id: entry?.id || data._id || `${title}-${province}-${index}`,
@@ -119,7 +144,25 @@ function parseSchool(entry, index) {
         website,
         year,
         updatedAt,
-        searchText: [title, province, area, telephone, email, website, year]
+        latitude: Number.isFinite(latitude) ? latitude : null,
+        longitude: Number.isFinite(longitude) ? longitude : null,
+        location: rawLocation,
+        matchedName,
+        formattedAddress,
+        geocodeQuery,
+        googleMapsUri,
+        searchText: [
+            title,
+            province,
+            area,
+            matchedName,
+            formattedAddress,
+            geocodeQuery,
+            telephone,
+            email,
+            website,
+            year,
+        ]
             .filter(Boolean)
             .join(" ")
             .toLowerCase(),
@@ -180,6 +223,35 @@ function createProvinceGeoJson(rawGeoJson, provinceCountByName, maxCount) {
     };
 }
 
+function createSchoolPointGeoJson(schools) {
+    return {
+        type: "FeatureCollection",
+        features: schools
+            .filter(
+                (school) =>
+                    Number.isFinite(school.latitude) &&
+                    Number.isFinite(school.longitude)
+            )
+            .map((school) => ({
+                type: "Feature",
+                properties: {
+                    id: school.id,
+                    title: school.title,
+                    area: school.area,
+                    province: school.province,
+                    website: school.website,
+                    formattedAddress: school.formattedAddress,
+                    source: school.location?.source || "",
+                    needsReview: Boolean(school.location?.needsReview),
+                },
+                geometry: {
+                    type: "Point",
+                    coordinates: [school.longitude, school.latitude],
+                },
+            })),
+    };
+}
+
 function getFeatureBounds(feature) {
     const bounds = {
         minLng: Infinity,
@@ -231,13 +303,131 @@ function getMapLayerColors(theme) {
     };
 }
 
+function escapeHtml(value = "") {
+    return value
+        .toString()
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
 function buildPopupHtml(province, count) {
     return `
         <div class="map-popup">
-            <strong>${province}</strong>
+            <strong>${escapeHtml(province)}</strong>
             <span>${pluralize(count, "school")}</span>
         </div>
     `;
+}
+
+function buildSchoolHoverPopupHtml(properties) {
+    const location = [properties.area, properties.province]
+        .filter(Boolean)
+        .join(", ");
+    const address = properties.formattedAddress || "";
+
+    return `
+        <div class="map-popup map-popup--school-hover">
+            <strong>${escapeHtml(properties.title)}</strong>
+            ${location ? `<span>${escapeHtml(location)}</span>` : ""}
+            ${address ? `<small>${escapeHtml(address)}</small>` : ""}
+        </div>
+    `;
+}
+
+function getSelectedSchoolFilter(schoolId) {
+    return ["==", ["get", "id"], schoolId || "__no_selected_school__"];
+}
+
+function getSchoolLayerFilter(province, schoolIds = [], filterBySchoolIds = false) {
+    const filters = [];
+
+    if (province) {
+        filters.push(["==", ["get", "province"], province]);
+    }
+
+    if (filterBySchoolIds) {
+        filters.push(
+            schoolIds.length
+                ? ["in", ["get", "id"], ["literal", schoolIds]]
+                : getSelectedSchoolFilter("")
+        );
+    }
+
+    if (!filters.length) return null;
+    return filters.length === 1 ? filters[0] : ["all", ...filters];
+}
+
+function setLayerVisibility(map, layerId, isVisible) {
+    if (!map?.getLayer(layerId)) return;
+    map.setLayoutProperty?.(
+        layerId,
+        "visibility",
+        isVisible ? "visible" : "none"
+    );
+}
+
+function applyMapLayerVisibility(map, mapLayers) {
+    setLayerVisibility(map, "school-heatmap", mapLayers.heatmap);
+    setLayerVisibility(map, "school-points", mapLayers.points);
+    setLayerVisibility(map, "hovered-school-point", mapLayers.points);
+    setLayerVisibility(map, "selected-school-point", mapLayers.points);
+    setLayerVisibility(map, "province-fill", mapLayers.provinceTint);
+}
+
+function getSchoolBounds(schools) {
+    const bounds = {
+        minLng: Infinity,
+        minLat: Infinity,
+        maxLng: -Infinity,
+        maxLat: -Infinity,
+        count: 0,
+    };
+
+    for (const school of schools) {
+        if (
+            !Number.isFinite(school.latitude) ||
+            !Number.isFinite(school.longitude)
+        ) {
+            continue;
+        }
+
+        bounds.minLng = Math.min(bounds.minLng, school.longitude);
+        bounds.minLat = Math.min(bounds.minLat, school.latitude);
+        bounds.maxLng = Math.max(bounds.maxLng, school.longitude);
+        bounds.maxLat = Math.max(bounds.maxLat, school.latitude);
+        bounds.count += 1;
+    }
+
+    if (!bounds.count) return null;
+    return bounds;
+}
+
+async function loadSchoolsJson() {
+    const geocodedResponse = await fetch(GEOCODED_SCHOOLS_URL, {
+        cache: "no-store",
+    });
+
+    if (geocodedResponse.ok) {
+        return geocodedResponse.json();
+    }
+
+    if (geocodedResponse.status !== 404) {
+        throw new Error(
+            `Could not load schools-geocoded.json (HTTP ${geocodedResponse.status})`
+        );
+    }
+
+    const schoolsResponse = await fetch(SCHOOLS_URL, { cache: "no-store" });
+    if (!schoolsResponse.ok) {
+        throw new Error(
+            `Could not load schools.json (HTTP ${schoolsResponse.status})`
+        );
+    }
+
+    return schoolsResponse.json();
 }
 
 export default function SchoolsMap() {
@@ -245,16 +435,23 @@ export default function SchoolsMap() {
     const mapRef = useRef(null);
     const popupRef = useRef(null);
     const selectedProvinceRef = useRef("");
+    const selectedSchoolIdRef = useRef("");
+    const hoveredSchoolIdRef = useRef("");
+    const visibleSchoolIdsRef = useRef([]);
+    const shouldFilterMapByQueryRef = useRef(false);
+    const mapLayersRef = useRef(DEFAULT_MAP_LAYERS);
     const hoveredProvinceRef = useRef("");
     const featureByProvinceRef = useRef(new Map());
 
     const [schools, setSchools] = useState([]);
     const [rawProvinceGeoJson, setRawProvinceGeoJson] = useState(null);
     const [selectedProvince, setSelectedProvince] = useState("");
+    const [selectedSchoolId, setSelectedSchoolId] = useState("");
     const [hoveredProvince, setHoveredProvince] = useState("");
     const [query, setQuery] = useState("");
     const [sortMode, setSortMode] = useState("name");
     const [visibleLimit, setVisibleLimit] = useState(LIST_BATCH_SIZE);
+    const [mapLayers, setMapLayers] = useState(DEFAULT_MAP_LAYERS);
     const [theme, setTheme] = useState(getInitialTheme);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
@@ -267,8 +464,24 @@ export default function SchoolsMap() {
     }, [selectedProvince]);
 
     useEffect(() => {
+        selectedSchoolIdRef.current = selectedSchoolId;
+        const map = mapRef.current;
+        if (map?.getLayer("selected-school-point")) {
+            map.setFilter(
+                "selected-school-point",
+                getSelectedSchoolFilter(selectedSchoolId)
+            );
+        }
+    }, [selectedSchoolId]);
+
+    useEffect(() => {
         themeRef.current = theme;
     }, [theme]);
+
+    useEffect(() => {
+        mapLayersRef.current = mapLayers;
+        applyMapLayerVisibility(mapRef.current, mapLayers);
+    }, [mapLayers]);
 
     useEffect(() => {
         window.localStorage?.setItem("ieb-schools-theme", theme);
@@ -282,16 +495,10 @@ export default function SchoolsMap() {
             setError("");
 
             try {
-                const [schoolsResponse, provincesResponse] = await Promise.all([
-                    fetch(SCHOOLS_URL, { cache: "no-store" }),
+                const [schoolsJson, provincesResponse] = await Promise.all([
+                    loadSchoolsJson(),
                     fetch(PROVINCES_URL, { cache: "force-cache" }),
                 ]);
-
-                if (!schoolsResponse.ok) {
-                    throw new Error(
-                        `Could not load schools.json (HTTP ${schoolsResponse.status})`
-                    );
-                }
 
                 if (!provincesResponse.ok) {
                     throw new Error(
@@ -299,10 +506,7 @@ export default function SchoolsMap() {
                     );
                 }
 
-                const [schoolsJson, provincesJson] = await Promise.all([
-                    schoolsResponse.json(),
-                    provincesResponse.json(),
-                ]);
+                const provincesJson = await provincesResponse.json();
 
                 if (!alive) return;
 
@@ -370,6 +574,21 @@ export default function SchoolsMap() {
         [maxProvinceCount, provinceCountByName, rawProvinceGeoJson]
     );
 
+    const schoolPointGeoJson = useMemo(
+        () => createSchoolPointGeoJson(schools),
+        [schools]
+    );
+
+    const locatedSchoolsCount = schoolPointGeoJson.features.length;
+
+    const schoolById = useMemo(
+        () => new Map(schools.map((school) => [school.id, school])),
+        [schools]
+    );
+    const selectedSchool = selectedSchoolId
+        ? schoolById.get(selectedSchoolId) || null
+        : null;
+
     useEffect(() => {
         const map = new Map();
         for (const feature of provinceGeoJson.features) {
@@ -377,6 +596,12 @@ export default function SchoolsMap() {
         }
         featureByProvinceRef.current = map;
     }, [provinceGeoJson]);
+
+    useEffect(() => {
+        if (selectedSchoolId && schools.length && !schoolById.has(selectedSchoolId)) {
+            setSelectedSchoolId("");
+        }
+    }, [schoolById, schools.length, selectedSchoolId]);
 
     const visibleSchools = useMemo(() => {
         const normalizedQuery = query.trim().toLowerCase();
@@ -389,6 +614,31 @@ export default function SchoolsMap() {
             return provinceMatches && queryMatches;
         });
     }, [query, schools, selectedProvince]);
+
+    const visibleSchoolIds = useMemo(
+        () => visibleSchools.map((school) => school.id),
+        [visibleSchools]
+    );
+    const visibleSchoolIdSet = useMemo(
+        () => new Set(visibleSchoolIds),
+        [visibleSchoolIds]
+    );
+    const shouldFilterMapByQuery = query.trim().length > 0;
+
+    useEffect(() => {
+        visibleSchoolIdsRef.current = visibleSchoolIds;
+        shouldFilterMapByQueryRef.current = shouldFilterMapByQuery;
+    }, [shouldFilterMapByQuery, visibleSchoolIds]);
+
+    useEffect(() => {
+        if (
+            selectedSchoolId &&
+            schools.length &&
+            !visibleSchoolIdSet.has(selectedSchoolId)
+        ) {
+            setSelectedSchoolId("");
+        }
+    }, [schools.length, selectedSchoolId, visibleSchoolIdSet]);
 
     const sortedSchools = useMemo(() => {
         return [...visibleSchools].sort((a, b) =>
@@ -435,30 +685,114 @@ export default function SchoolsMap() {
         });
     }, []);
 
-    const setMapPaintForSelection = useCallback((province) => {
+    const focusSchool = useCallback((school, options = {}) => {
         const map = mapRef.current;
-        if (!map?.getLayer("province-fill")) return;
+        if (
+            !map ||
+            !Number.isFinite(school?.latitude) ||
+            !Number.isFinite(school?.longitude)
+        ) {
+            return;
+        }
 
-        const colors = getMapLayerColors(theme);
-        map.setPaintProperty("province-fill", "fill-opacity", [
-            "case",
-            ["all", ["!=", province, ""], ["!=", ["get", "province"], province]],
-            0.25,
-            0.7,
-        ]);
-        map.setPaintProperty("province-line", "line-color", [
-            "case",
-            ["==", ["get", "province"], province],
-            colors.selectedLine,
-            colors.line,
-        ]);
-        map.setPaintProperty("province-line", "line-width", [
-            "case",
-            ["==", ["get", "province"], province],
-            3,
-            1.2,
-        ]);
-    }, [theme]);
+        map.flyTo({
+            center: [school.longitude, school.latitude],
+            zoom: 10.2,
+            duration: options.instant ? 0 : 850,
+            essential: true,
+        });
+    }, []);
+
+    const fitSchools = useCallback(
+        (schoolsToFit, options = {}) => {
+            const map = mapRef.current;
+            if (!map) return;
+
+            const locatedSchools = schoolsToFit.filter(
+                (school) =>
+                    Number.isFinite(school.latitude) &&
+                    Number.isFinite(school.longitude)
+            );
+            if (!locatedSchools.length) return;
+
+            if (locatedSchools.length === 1) {
+                focusSchool(locatedSchools[0], options);
+                return;
+            }
+
+            const bounds = getSchoolBounds(locatedSchools);
+            if (!bounds) return;
+
+            map.fitBounds(
+                [
+                    [bounds.minLng, bounds.minLat],
+                    [bounds.maxLng, bounds.maxLat],
+                ],
+                {
+                    padding: { top: 80, right: 80, bottom: 80, left: 80 },
+                    maxZoom: 10.2,
+                    duration: options.instant ? 0 : 750,
+                }
+            );
+        },
+        [focusSchool]
+    );
+
+    const handleSchoolSelect = useCallback(
+        (school, options = {}) => {
+            if (!school?.id) return;
+            setSelectedSchoolId(school.id);
+            if (options.focusMap !== false) {
+                focusSchool(school, options);
+            }
+        },
+        [focusSchool]
+    );
+
+    const setMapPaintForSelection = useCallback(
+        (province, options = {}) => {
+            const map = mapRef.current;
+            if (!map?.getLayer("province-fill")) return;
+
+            const colors = getMapLayerColors(theme);
+            map.setPaintProperty("province-fill", "fill-opacity", [
+                "case",
+                [
+                    "all",
+                    ["!=", province, ""],
+                    ["!=", ["get", "province"], province],
+                ],
+                0.25,
+                0.7,
+            ]);
+            map.setPaintProperty("province-line", "line-color", [
+                "case",
+                ["==", ["get", "province"], province],
+                colors.selectedLine,
+                colors.line,
+            ]);
+            map.setPaintProperty("province-line", "line-width", [
+                "case",
+                ["==", ["get", "province"], province],
+                3,
+                1.2,
+            ]);
+
+            const schoolFilter = getSchoolLayerFilter(
+                province,
+                options.schoolIds,
+                options.filterBySchoolIds
+            );
+
+            if (map.getLayer("school-heatmap")) {
+                map.setFilter("school-heatmap", schoolFilter);
+            }
+            if (map.getLayer("school-points")) {
+                map.setFilter("school-points", schoolFilter);
+            }
+        },
+        [theme]
+    );
 
     const addMapLayers = useCallback(() => {
         const map = mapRef.current;
@@ -466,10 +800,18 @@ export default function SchoolsMap() {
 
         const colors = getMapLayerColors(theme);
 
-        if (map.getLayer("province-labels")) map.removeLayer("province-labels");
-        if (map.getLayer("province-bubbles")) map.removeLayer("province-bubbles");
-        if (map.getLayer("province-line")) map.removeLayer("province-line");
-        if (map.getLayer("province-fill")) map.removeLayer("province-fill");
+        [
+            "province-labels",
+            "selected-school-point",
+            "hovered-school-point",
+            "school-points",
+            "school-heatmap",
+            "province-line",
+            "province-fill",
+        ].forEach((layerId) => {
+            if (map.getLayer(layerId)) map.removeLayer(layerId);
+        });
+        if (map.getSource("schools")) map.removeSource("schools");
         if (map.getSource("provinces")) map.removeSource("provinces");
 
         map.addSource("provinces", {
@@ -498,26 +840,134 @@ export default function SchoolsMap() {
             },
         });
 
-        map.addLayer({
-            id: "province-bubbles",
-            type: "circle",
-            source: "provinces",
-            paint: {
-                "circle-color": "#f5b33f",
-                "circle-radius": [
-                    "interpolate",
-                    ["linear"],
-                    ["sqrt", ["get", "schoolCount"]],
-                    0,
-                    8,
-                    Math.sqrt(maxProvinceCount),
-                    28,
-                ],
-                "circle-opacity": 0.9,
-                "circle-stroke-color": colors.line,
-                "circle-stroke-width": 1.5,
-            },
-        });
+        if (schoolPointGeoJson.features.length) {
+            map.addSource("schools", {
+                type: "geojson",
+                data: schoolPointGeoJson,
+                cluster: false,
+            });
+
+            map.addLayer({
+                id: "school-heatmap",
+                type: "heatmap",
+                source: "schools",
+                maxzoom: 10,
+                paint: {
+                    "heatmap-weight": 1,
+                    "heatmap-intensity": [
+                        "interpolate",
+                        ["linear"],
+                        ["zoom"],
+                        4,
+                        0.7,
+                        9,
+                        2.2,
+                    ],
+                    "heatmap-radius": [
+                        "interpolate",
+                        ["linear"],
+                        ["zoom"],
+                        4,
+                        18,
+                        9,
+                        46,
+                    ],
+                    "heatmap-opacity": [
+                        "interpolate",
+                        ["linear"],
+                        ["zoom"],
+                        5,
+                        0.82,
+                        10,
+                        0.25,
+                    ],
+                    "heatmap-color": [
+                        "interpolate",
+                        ["linear"],
+                        ["heatmap-density"],
+                        0,
+                        "rgba(47, 197, 170, 0)",
+                        0.25,
+                        "#8ed0c0",
+                        0.5,
+                        "#f5b33f",
+                        0.75,
+                        "#f06445",
+                        1,
+                        "#d8332f",
+                    ],
+                },
+            });
+
+            map.addLayer({
+                id: "school-points",
+                type: "circle",
+                source: "schools",
+                paint: {
+                    "circle-color": [
+                        "case",
+                        ["==", ["get", "needsReview"], true],
+                        "#f5b33f",
+                        "#ef3f38",
+                    ],
+                    "circle-radius": [
+                        "interpolate",
+                        ["linear"],
+                        ["zoom"],
+                        4,
+                        3.5,
+                        9,
+                        7,
+                    ],
+                    "circle-opacity": 0.9,
+                    "circle-stroke-color": "#ffffff",
+                    "circle-stroke-width": 1.5,
+                },
+            });
+
+            map.addLayer({
+                id: "hovered-school-point",
+                type: "circle",
+                source: "schools",
+                filter: getSelectedSchoolFilter(hoveredSchoolIdRef.current),
+                paint: {
+                    "circle-color": "rgba(245, 179, 63, 0.28)",
+                    "circle-radius": [
+                        "interpolate",
+                        ["linear"],
+                        ["zoom"],
+                        4,
+                        9,
+                        9,
+                        16,
+                    ],
+                    "circle-stroke-color": "#f5b33f",
+                    "circle-stroke-width": 2.4,
+                },
+            });
+
+            map.addLayer({
+                id: "selected-school-point",
+                type: "circle",
+                source: "schools",
+                filter: getSelectedSchoolFilter(selectedSchoolIdRef.current),
+                paint: {
+                    "circle-color": "#f5b33f",
+                    "circle-radius": [
+                        "interpolate",
+                        ["linear"],
+                        ["zoom"],
+                        4,
+                        7,
+                        9,
+                        13,
+                    ],
+                    "circle-opacity": 0.96,
+                    "circle-stroke-color": colors.labelHalo,
+                    "circle-stroke-width": 3,
+                },
+            });
+        }
 
         map.addLayer({
             id: "province-labels",
@@ -546,8 +996,12 @@ export default function SchoolsMap() {
             },
         });
 
-        setMapPaintForSelection(selectedProvinceRef.current);
-    }, [maxProvinceCount, provinceGeoJson, setMapPaintForSelection, theme]);
+        setMapPaintForSelection(selectedProvinceRef.current, {
+            schoolIds: visibleSchoolIdsRef.current,
+            filterBySchoolIds: shouldFilterMapByQueryRef.current,
+        });
+        applyMapLayerVisibility(map, mapLayersRef.current);
+    }, [provinceGeoJson, schoolPointGeoJson, setMapPaintForSelection, theme]);
 
     useEffect(() => {
         addMapLayersRef.current = addMapLayers;
@@ -604,12 +1058,51 @@ export default function SchoolsMap() {
                 addMapLayersRef.current();
             };
 
+            const getSchoolFeatureAt = (event) => {
+                const layers = ["selected-school-point", "school-points"].filter(
+                    (layerId) => map.getLayer(layerId)
+                );
+
+                if (!layers.length) return null;
+                return map.queryRenderedFeatures(event.point, { layers })?.[0] || null;
+            };
+
+            const setHoveredSchool = (schoolId) => {
+                if (hoveredSchoolIdRef.current === schoolId) return;
+                hoveredSchoolIdRef.current = schoolId;
+                if (map.getLayer("hovered-school-point")) {
+                    map.setFilter(
+                        "hovered-school-point",
+                        getSelectedSchoolFilter(schoolId)
+                    );
+                }
+            };
+
+            const clearHoveredSchool = () => {
+                if (!hoveredSchoolIdRef.current) return;
+                hoveredSchoolIdRef.current = "";
+                if (map.getLayer("hovered-school-point")) {
+                    map.setFilter(
+                        "hovered-school-point",
+                        getSelectedSchoolFilter("")
+                    );
+                }
+            };
+
             const handleClick = (event) => {
+                const schoolFeature = getSchoolFeatureAt(event);
+
+                if (schoolFeature?.properties?.id) {
+                    setSelectedSchoolId(schoolFeature.properties.id);
+                    popupRef.current?.remove();
+                    return;
+                }
+
                 if (!map.getLayer("province-fill")) return;
-                const feature = map.queryRenderedFeatures(event.point, {
+                const provinceFeature = map.queryRenderedFeatures(event.point, {
                     layers: ["province-fill"],
                 })?.[0];
-                const province = feature?.properties?.province;
+                const province = provinceFeature?.properties?.province;
                 if (!province) return;
                 setSelectedProvince((current) =>
                     current === province ? "" : province
@@ -617,12 +1110,31 @@ export default function SchoolsMap() {
             };
 
             const handleMouseMove = (event) => {
+                const schoolFeature = getSchoolFeatureAt(event);
+
+                if (schoolFeature) {
+                    map.getCanvas().style.cursor = "pointer";
+                    setHoveredSchool(schoolFeature.properties?.id || "");
+                    const province = schoolFeature.properties?.province || "";
+                    if (hoveredProvinceRef.current !== province) {
+                        hoveredProvinceRef.current = province;
+                        setHoveredProvince(province);
+                    }
+                    popupRef.current
+                        ?.setLngLat(event.lngLat)
+                        .setHTML(buildSchoolHoverPopupHtml(schoolFeature.properties))
+                        .addTo(map);
+                    return;
+                }
+
+                clearHoveredSchool();
+
                 if (!map.getLayer("province-fill")) return;
-                const feature = map.queryRenderedFeatures(event.point, {
+                const provinceFeature = map.queryRenderedFeatures(event.point, {
                     layers: ["province-fill"],
                 })?.[0];
-                const province = feature?.properties?.province;
-                const count = Number(feature?.properties?.schoolCount || 0);
+                const province = provinceFeature?.properties?.province;
+                const count = Number(provinceFeature?.properties?.schoolCount || 0);
 
                 if (!province) {
                     handleMouseLeave();
@@ -644,6 +1156,7 @@ export default function SchoolsMap() {
 
             const handleMouseLeave = () => {
                 map.getCanvas().style.cursor = "";
+                clearHoveredSchool();
                 hoveredProvinceRef.current = "";
                 setHoveredProvince("");
                 popupRef.current?.remove();
@@ -694,17 +1207,54 @@ export default function SchoolsMap() {
     }, [theme]);
 
     useEffect(() => {
-        setMapPaintForSelection(selectedProvince);
-        fitProvince(selectedProvince);
-    }, [fitProvince, selectedProvince, setMapPaintForSelection]);
+        setMapPaintForSelection(selectedProvince, {
+            schoolIds: visibleSchoolIds,
+            filterBySchoolIds: shouldFilterMapByQuery,
+        });
+    }, [
+        selectedProvince,
+        setMapPaintForSelection,
+        shouldFilterMapByQuery,
+        visibleSchoolIds,
+    ]);
+
+    useEffect(() => {
+        const timeoutId = window.setTimeout(
+            () => {
+                if (shouldFilterMapByQuery) {
+                    fitSchools(visibleSchools);
+                    return;
+                }
+
+                fitProvince(selectedProvince);
+            },
+            shouldFilterMapByQuery ? 260 : 0
+        );
+
+        return () => window.clearTimeout(timeoutId);
+    }, [
+        fitProvince,
+        fitSchools,
+        selectedProvince,
+        shouldFilterMapByQuery,
+        visibleSchools,
+    ]);
 
     function toggleProvince(province) {
         setSelectedProvince((current) => (current === province ? "" : province));
     }
 
+    function toggleMapLayer(layerId) {
+        setMapLayers((current) => ({
+            ...current,
+            [layerId]: !current[layerId],
+        }));
+    }
+
     function clearFilters() {
         setSelectedProvince("");
         setQuery("");
+        setSelectedSchoolId("");
     }
 
     if (loading) {
@@ -829,6 +1379,37 @@ export default function SchoolsMap() {
                         </div>
                     </div>
 
+                    <div className="map-options" aria-label="Map options">
+                        <span className="map-options__label">
+                            <FaLayerGroup aria-hidden="true" />
+                            Layers
+                        </span>
+                        <label className="layer-switch">
+                            <input
+                                type="checkbox"
+                                checked={mapLayers.heatmap}
+                                onChange={() => toggleMapLayer("heatmap")}
+                            />
+                            <span>Heatmap</span>
+                        </label>
+                        <label className="layer-switch">
+                            <input
+                                type="checkbox"
+                                checked={mapLayers.points}
+                                onChange={() => toggleMapLayer("points")}
+                            />
+                            <span>School points</span>
+                        </label>
+                        <label className="layer-switch">
+                            <input
+                                type="checkbox"
+                                checked={mapLayers.provinceTint}
+                                onChange={() => toggleMapLayer("provinceTint")}
+                            />
+                            <span>Province tint</span>
+                        </label>
+                    </div>
+
                     <div className="map-shell">
                         <div
                             className="map-canvas"
@@ -844,6 +1425,10 @@ export default function SchoolsMap() {
                                 {activeProvince
                                     ? pluralize(activeProvince.count, "school")
                                     : pluralize(schools.length, "school")}
+                            </em>
+                            <em>
+                                {numberFormatter.format(locatedSchoolsCount)}{" "}
+                                geocoded
                             </em>
                         </div>
                         <div className="legend" aria-hidden="true">
@@ -874,8 +1459,12 @@ export default function SchoolsMap() {
 
                 <DirectoryPanel
                     clearFilters={clearFilters}
+                    onClearSchoolSelection={() => setSelectedSchoolId("")}
+                    onSchoolSelect={handleSchoolSelect}
                     query={query}
                     renderedSchools={renderedSchools}
+                    selectedSchool={selectedSchool}
+                    selectedSchoolId={selectedSchoolId}
                     selectedProvince={selectedProvince}
                     setQuery={setQuery}
                     setSortMode={setSortMode}
@@ -913,8 +1502,12 @@ export default function SchoolsMap() {
 
 function DirectoryPanel({
     clearFilters,
+    onClearSchoolSelection,
+    onSchoolSelect,
     query,
     renderedSchools,
+    selectedSchool,
+    selectedSchoolId,
     selectedProvince,
     setQuery,
     setSortMode,
@@ -942,13 +1535,34 @@ function DirectoryPanel({
                 )}
             </div>
 
+            {selectedSchool && (
+                <div className="selected-school-panel" aria-live="polite">
+                    <div className="selected-school-panel__heading">
+                        <p className="eyebrow">Selected school</p>
+                        <button
+                            className="ghost-button"
+                            type="button"
+                            onClick={onClearSchoolSelection}
+                        >
+                            <FaTimes aria-hidden="true" />
+                            Clear
+                        </button>
+                    </div>
+                    <SchoolCard
+                        school={selectedSchool}
+                        isSelected
+                        onSelect={onSchoolSelect}
+                    />
+                </div>
+            )}
+
             <div className="toolbar">
                 <label className="search-field">
                     <FaSearch aria-hidden="true" />
                     <input
                         value={query}
                         onChange={(event) => setQuery(event.target.value)}
-                        placeholder="Search school, area, province"
+                        placeholder="Search school, area, city, address"
                         aria-label="Search schools"
                     />
                 </label>
@@ -969,13 +1583,22 @@ function DirectoryPanel({
 
             <div className="result-bar">
                 <span>{pluralize(visibleSchools.length, "result")}</span>
-                <span>{selectedProvince || "All provinces"}</span>
+                <span>
+                    {query.trim()
+                        ? `Location: ${query.trim()}`
+                        : selectedProvince || "All provinces"}
+                </span>
             </div>
 
             <div className="school-list" role="list">
                 {renderedSchools.length ? (
                     renderedSchools.map((school) => (
-                        <SchoolCard key={school.id} school={school} />
+                        <SchoolCard
+                            key={school.id}
+                            school={school}
+                            isSelected={school.id === selectedSchoolId}
+                            onSelect={onSchoolSelect}
+                        />
                     ))
                 ) : (
                     <div className="empty-state">
@@ -1012,9 +1635,26 @@ function DirectoryPanel({
     );
 }
 
-const SchoolCard = memo(function SchoolCard({ school }) {
+const SchoolCard = memo(function SchoolCard({ isSelected = false, onSelect, school }) {
+    const selectSchool = () => {
+        onSelect?.(school);
+    };
+
+    const handleKeyDown = (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        selectSchool();
+    };
+
     return (
-        <article className="school-card" role="listitem">
+        <article
+            className={isSelected ? "school-card is-selected" : "school-card"}
+            role="listitem"
+            tabIndex={onSelect ? 0 : undefined}
+            aria-current={isSelected ? "true" : undefined}
+            onClick={selectSchool}
+            onKeyDown={handleKeyDown}
+        >
             <div className="school-card__header">
                 <div>
                     <h3>{school.title}</h3>
@@ -1024,6 +1664,11 @@ const SchoolCard = memo(function SchoolCard({ school }) {
                             .filter(Boolean)
                             .join(", ")}
                     </p>
+                    {school.formattedAddress && (
+                        <p className="school-card__address">
+                            {school.formattedAddress}
+                        </p>
+                    )}
                 </div>
 
                 {school.year && (
@@ -1031,7 +1676,11 @@ const SchoolCard = memo(function SchoolCard({ school }) {
                 )}
             </div>
 
-            <div className="contact-grid">
+            <div
+                className="contact-grid"
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}
+            >
                 {school.telephone && (
                     <a href={`tel:${school.telephone.replace(/\s+/g, "")}`}>
                         <FaPhoneAlt aria-hidden="true" />
